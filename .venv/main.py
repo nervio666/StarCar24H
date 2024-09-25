@@ -1,10 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog
 from datetime import datetime, timedelta
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 import json
-import os
 
 
 class CarreraResistenciaApp:
@@ -25,6 +22,8 @@ class CarreraResistenciaApp:
         self.piloto_actual = tk.StringVar(value="Selecciona un piloto")
 
         self.tiempos_vueltas_label = []
+
+        self.incidencias = []  # Lista de incidencias activas
 
         self.create_widgets()
 
@@ -77,9 +76,15 @@ class CarreraResistenciaApp:
         btn_abrir_sesion.pack(pady=10)
 
         # Botón para gestionar incidencias
-        btn_incidencia = tk.Button(self.root, text="Incidencia", command=self.registrar_incidencia, bg="orange",
-                                   fg="black")
-        btn_incidencia.pack(pady=10)
+        self.btn_incidencia = tk.Button(self.root, text="Iniciar Incidencia", command=self.registrar_incidencia,
+                                        bg="orange", fg="black")
+        self.btn_incidencia.pack(pady=10)
+
+        # Botón para finalizar incidencias (se desactiva hasta que una incidencia esté activa)
+        self.btn_finalizar_incidencia = tk.Button(self.root, text="Finalizar Incidencia",
+                                                  command=self.finalizar_incidencia, bg="red", fg="white",
+                                                  state=tk.DISABLED)
+        self.btn_finalizar_incidencia.pack(pady=10)
 
         # Botón para gestionar la entrada/salida de boxes
         self.btn_boxes = tk.Button(self.root, text="Entrar a Boxes", command=self.gestion_boxes, bg="blue", fg="white")
@@ -138,7 +143,7 @@ class CarreraResistenciaApp:
         self.vuelta_en_curso = False
         self.btn_cronometro_vuelta.config(text="Iniciar Vuelta", bg="green", fg="white")
 
-    def mostrar_vuelta(self, num_vuelta, piloto, tiempo_vuelta):
+    def mostrar_vuelta(self, num_vuelta, piloto, tiempo_vuelta, tipo="Vuelta", tiempo_diferencia="", indicador=""):
         """Mostrar la vuelta en la interfaz."""
         fila = len(self.tiempos_vueltas_label) + 1
         lbl_vuelta = tk.Label(self.frame_vueltas, text=str(num_vuelta), width=10)
@@ -151,18 +156,13 @@ class CarreraResistenciaApp:
         lbl_tiempo = tk.Label(self.frame_vueltas, text=tiempo_formateado, width=20)
         lbl_tiempo.grid(row=fila, column=2)
 
-        # Calcular diferencia con la vuelta anterior
-        diferencia, es_rapida = self.calcular_diferencia(num_vuelta, piloto, tiempo_vuelta)
-        lbl_diferencia = tk.Label(self.frame_vueltas, text=diferencia, width=20)
+        # Mostrar la diferencia con la vuelta anterior y el indicador
+        lbl_diferencia = tk.Label(self.frame_vueltas, text=tiempo_diferencia, width=20)
         lbl_diferencia.grid(row=fila, column=3)
-
-        # Determinar si fue más rápida o más lenta
-        icono_indicador = "▲" if not es_rapida else "▼"  # Triángulo rojo hacia arriba para más lento, verde hacia abajo para más rápido
-        color = "red" if not es_rapida else "green"
-        lbl_indicador = tk.Label(self.frame_vueltas, text=icono_indicador, fg=color, width=10)
+        lbl_indicador = tk.Label(self.frame_vueltas, text=indicador, width=10)
         lbl_indicador.grid(row=fila, column=4)
 
-        # Guardar referencias para futuras actualizaciones
+        # Añadir la vuelta registrada a la lista de etiquetas
         self.tiempos_vueltas_label.append((lbl_vuelta, lbl_piloto, lbl_tiempo, lbl_diferencia, lbl_indicador))
 
     def formatear_tiempo(self, tiempo):
@@ -187,15 +187,38 @@ class CarreraResistenciaApp:
         """Registrar una incidencia mediante una ventana emergente."""
 
         def set_incidencia(tipo):
-            self.incidencia_actual = (tipo, datetime.now())
+            self.incidencia_actual = {"tipo": tipo, "inicio_vuelta": self.num_vuelta_global,
+                                      "inicio_hora": datetime.now()}
             self.datos_equipo[self.piloto_actual.get()]["incidencias"].append(self.incidencia_actual)
             incidencia_window.destroy()
+            self.btn_finalizar_incidencia.config(state=tk.NORMAL)
+            # Añadir al resumen la incidencia como un evento en la vuelta actual
+            self.mostrar_vuelta(self.num_vuelta_global, self.piloto_actual.get(), timedelta(0),
+                                tipo="Inicio de Incidencia")
 
         incidencia_window = tk.Toplevel(self.root)
         incidencia_window.title("Seleccionar Incidencia")
         for tipo in ["Safety Car", "Bandera Roja", "Bandera Amarilla", "Bandera Negra"]:
             btn = tk.Button(incidencia_window, text=tipo, command=lambda t=tipo: set_incidencia(t))
             btn.pack(pady=5)
+
+    def finalizar_incidencia(self):
+        """Finalizar la incidencia actual."""
+        if not self.incidencia_actual:
+            messagebox.showerror("Error", "No hay ninguna incidencia activa para finalizar.")
+            return
+        self.incidencia_actual["fin_vuelta"] = self.num_vuelta_global
+        self.incidencia_actual["fin_hora"] = datetime.now()
+        self.btn_finalizar_incidencia.config(state=tk.DISABLED)
+        self.mostrar_incidencia(self.incidencia_actual)
+        # Añadir al resumen el fin de la incidencia en la vuelta actual
+        self.mostrar_vuelta(self.num_vuelta_global, self.piloto_actual.get(), timedelta(0), tipo="Fin de Incidencia")
+        self.incidencia_actual = None
+
+    def mostrar_incidencia(self, incidencia):
+        """Mostrar la incidencia en la interfaz."""
+        messagebox.showinfo("Incidencia Registrada",
+                            f"Incidencia '{incidencia['tipo']}'\nInicio en vuelta: {incidencia['inicio_vuelta']}\nFin en vuelta: {incidencia['fin_vuelta']}")
 
     def gestion_boxes(self):
         """Registrar entrada o salida de boxes."""
@@ -204,6 +227,8 @@ class CarreraResistenciaApp:
             self.inicio_boxes = datetime.now()
             self.en_boxes = True
             self.btn_boxes.config(text="Salir de Boxes", bg="red")
+            # Añadir al resumen la entrada a boxes
+            self.mostrar_vuelta(self.num_vuelta_global, self.piloto_actual.get(), timedelta(0), tipo="Entrada a Boxes")
         else:
             # Registrar salida de boxes
             fin_boxes = datetime.now()
@@ -212,6 +237,8 @@ class CarreraResistenciaApp:
             self.mostrar_tiempo_boxes(tiempo_boxes)
             self.en_boxes = False
             self.btn_boxes.config(text="Entrar a Boxes", bg="blue")
+            # Añadir al resumen la salida de boxes con el tiempo total
+            self.mostrar_vuelta(self.num_vuelta_global, self.piloto_actual.get(), tiempo_boxes, tipo="Salida de Boxes")
 
     def mostrar_tiempo_boxes(self, tiempo_boxes):
         """Mostrar el tiempo de boxes actual."""
